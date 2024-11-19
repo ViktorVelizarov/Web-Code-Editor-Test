@@ -1,13 +1,12 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import 'codemirror/lib/codemirror.css';
 import 'codemirror/theme/material-ocean.css';
 import 'codemirror/mode/javascript/javascript';
 import 'codemirror/keymap/sublime';
 import CodeMirror from 'codemirror';
 import io from 'socket.io-client';
-import { Typography } from '@mui/material';
+import { Typography } from '@mui/material'; // Material UI Typography
 import { useStore } from '../store';
-import debounce from 'lodash.debounce';
 
 const RealTimeEditor = () => {
   const [users, setUsers] = useState([]);
@@ -15,21 +14,9 @@ const RealTimeEditor = () => {
     username,
     roomId,
   }));
-  
-  // Create a ref to store the socket instance
-  const socketRef = React.useRef(null);
-  const editorRef = React.useRef(null);
-
-  // Create a debounced function for emitting changes
-  const debouncedEmit = useCallback(
-    debounce((socket, code) => {
-      console.log('Emitting debounced CODE_CHANGED event with code:', code);
-      socket.emit('CODE_CHANGED', code);
-    }, 100), // Adjust this delay as needed
-    []
-  );
 
   useEffect(() => {
+    // Initialize CodeMirror
     const editor = CodeMirror.fromTextArea(document.getElementById('ds'), {
       lineNumbers: true,
       keyMap: 'sublime',
@@ -37,15 +24,12 @@ const RealTimeEditor = () => {
       mode: 'javascript',
     });
 
-    editorRef.current = editor;
-
+    // Initialize socket connection
     const socket = io('https://collaborativecodeeditor-440923.lm.r.appspot.com/', {
       transports: ['websocket'],
     });
 
-    socketRef.current = socket;
-
-    // Connection event handlers
+    // Handle socket connection events
     socket.on('connect', () => {
       console.log('Connected to server');
       socket.emit('CONNECTED_TO_ROOM', { roomId, username });
@@ -53,46 +37,42 @@ const RealTimeEditor = () => {
 
     socket.on('disconnect', () => {
       console.log('Disconnected from server');
-      socket.emit('DISSCONNECT_FROM_ROOM', { roomId, username });
+      socket.emit('DISCONNECT_FROM_ROOM', { roomId, username });
     });
 
-    // Handle incoming code changes
-    socket.on('CODE_CHANGED', (code) => {
-      console.log('CODE_CHANGED event received with code:', code);
-      const currentCursor = editor.getCursor();
-      editor.setValue(code);
-      editor.setCursor(currentCursor);
+    // Listen for code changes from the server
+    socket.on('CODE_CHANGED', (newCode) => {
+      const currentCode = editor.getValue();
+      if (newCode !== currentCode) {
+        const cursorPosition = editor.getCursor(); // Save cursor position
+        editor.doc.setValue(newCode); // Update the editor content
+        editor.setCursor(cursorPosition); // Restore cursor position
+      }
     });
 
+    // Listen for updated user list
     socket.on('ROOM:CONNECTION', (users) => {
       console.log('Updated users in room:', users);
       setUsers(users);
     });
 
-    // Handle editor changes with debouncing
+    // Listen for changes in the CodeMirror editor and emit them
     editor.on('change', (instance, changes) => {
       const { origin } = changes;
-      if (origin !== 'setValue') {
-        debouncedEmit(socket, instance.getValue());
+      if (origin !== 'setValue') { // Prevent emit on setValue to avoid loops
+        console.log('Emitting CODE_CHANGED event with code:', instance.getValue());
+        socket.emit('CODE_CHANGED', instance.getValue());
       }
     });
 
-    // Cleanup function
+    // Cleanup on unmount
     return () => {
       console.log('Cleaning up socket connection');
-      // Cancel any pending debounced emissions
-      debouncedEmit.cancel();
-      // Clean up socket
-      if (socket) {
-        socket.emit('DISSCONNECT_FROM_ROOM', { roomId, username });
-        socket.disconnect();
-      }
-      // Clean up editor
-      if (editor) {
-        editor.toTextArea();
-      }
+      socket.emit('DISCONNECT_FROM_ROOM', { roomId, username });
+      socket.disconnect();
+      editor.toTextArea(); // Cleanup CodeMirror instance
     };
-  }, [roomId, username, debouncedEmit]);
+  }, [roomId, username]);
 
   return (
     <>
